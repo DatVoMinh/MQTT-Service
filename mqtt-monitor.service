@@ -1,0 +1,18 @@
+[Unit]
+Description=MQTT Monitor Service
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=dat
+Group=dat
+WorkingDirectory=/home/wcs2/AMR/auto_start/scripts
+ExecStart=/home/wcs2/AMR/auto_start/scripts/run_mqtt_monitor.sh
+Restart=always
+RestartSec=5
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
