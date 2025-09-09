@@ -33,8 +33,8 @@ static const std::string SUB_TOPIC = "fleetmanagement/3/robot/info";
 
 // Timeouts / behavior
 static const double NO_MESSAGE_TIMEOUT = 20.0;   // seconds
-static const double RESTART_WAIT_TIME = 10.0;   // seconds
-static const int MAX_CONSECUTIVE_KILLS = 3;
+static const double RESTART_WAIT_TIME = 60.0;   // seconds
+static const int MAX_CONSECUTIVE_KILLS = 10;
 
 // ---------- Utilities ----------
 static std::atomic<bool> g_running{true};
@@ -202,8 +202,6 @@ int main() {
     connOpts.set_mqtt_version(4); // MQTT v3.1.1
     connOpts.set_clean_session(true);
     connOpts.set_automatic_reconnect(true); // Enable automatic reconnect
-    // connOpts.set_min_reconnect_interval(1); // Min wait: 1 second
-    // connOpts.set_max_reconnect_interval(30); // Max wait: 30 seconds
 
     try {
         client.connect(connOpts)->wait();
@@ -213,7 +211,7 @@ int main() {
             << "  - Broker: " << server_uri << "\n"
             << "  - Topic: " << SUB_TOPIC << "\n"
             << "  - Timeout: " << NO_MESSAGE_TIMEOUT << "s\n"
-            << "  - Kill cooldown: " << RESTART_WAIT_TIME << "s\n"
+            << "  - Kill cooldown base: " << RESTART_WAIT_TIME << "s\n"
             << "  - Max consecutive kills: " << MAX_CONSECUTIVE_KILLS;
         logger.info(oss.str());
     } catch (const std::exception& e) {
@@ -233,27 +231,34 @@ int main() {
                 if (connected_.load()) {
                     const auto last_msg = last_msg_ms.load();
                     const double delta_s = (now_ms - last_msg) / 1000.0;
-                    
+
                     if (delta_s >= NO_MESSAGE_TIMEOUT) {
                         const auto last_kill = last_kill_time.load();
                         const double time_since_kill_s = (now_ms - last_kill) / 1000.0;
-                        
-                        if (time_since_kill_s >= RESTART_WAIT_TIME) {
+
+                        // New: cooldown grows with consecutive_kill_count (always >= base)
+                        const int kill_count = std::max(1, consecutive_kill_count.load());
+                        const double cooldown_needed_s = RESTART_WAIT_TIME * static_cast<double>(kill_count);
+
+                        if (time_since_kill_s >= cooldown_needed_s) {
                             std::ostringstream oss;
-                            oss << "[" << now_time_str() << "] No MQTT messages for " 
-                                << std::fixed << std::setprecision(1) << delta_s << "s (>=" 
-                                << NO_MESSAGE_TIMEOUT << "s). Initiating kill.";
+                            oss << "[" << now_time_str() << "] No MQTT messages for "
+                                << std::fixed << std::setprecision(1) << delta_s << "s (>="
+                                << NO_MESSAGE_TIMEOUT << "s). Initiating kill. "
+                                << "(cooldown_needed=" << cooldown_needed_s << "s, consecutive_kills=" << consecutive_kill_count.load() << ")";
                             logger.info(oss.str());
-                            
+
                             kill_robot_adapter(logger, consecutive_kill_count);
                             last_kill_time.store(now_ms);
                         } else {
                             std::ostringstream oss;
-                            oss << "[" << now_time_str() << "] In cooldown period. " 
-                                << std::fixed << std::setprecision(1) << time_since_kill_s 
-                                << "s since last kill. Need " 
-                                << (RESTART_WAIT_TIME - time_since_kill_s) 
-                                << "s until next kill allowed.";
+                            oss << "[" << now_time_str() << "] In cooldown period. "
+                                << std::fixed << std::setprecision(1) << time_since_kill_s
+                                << "s since last kill. Need "
+                                << (cooldown_needed_s - time_since_kill_s)
+                                << "s until next kill allowed "
+                                << "(cooldown_needed=" << cooldown_needed_s
+                                << "s, consecutive_kills=" << consecutive_kill_count.load() << ").";
                             logger.info(oss.str());
                         }
                     }
